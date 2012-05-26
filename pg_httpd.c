@@ -13,6 +13,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <sys/socket.h>
@@ -39,8 +40,7 @@ int http_port = 54321;
  * "tablename".
  *
  * The database host, port and user will default to the environment that starts
- * up this program.  The buffers used to send the HTTP response is also fixed,
- * so quering large tables may result in truncated JSON.
+ * up this program.
  */
 int main()
 {
@@ -105,6 +105,8 @@ int main()
 		char *p1, *p2;
 		char method[8];
 		char request_uri[1024];
+		char *http_response;
+		int content_length;
 
 		/* JSON stuff */
 		json_object *json_obj, *json_array;
@@ -196,15 +198,21 @@ int main()
 		/* Construct the HTTP response. */
 		printf("json: %s\n", json_object_to_json_string(json_array));
 
-		snprintf(data, length,
+		content_length = strlen(json_object_to_json_string(json_array));
+		/*
+		 * I don't think the HTTP response header will ever get more than 64
+		 * bytes...
+		 */
+		http_response = (char *) malloc(content_length + 64);
+		snprintf(http_response, content_length + 63,
 				"HTTP/1.0 200 OK\n" \
 				"Content-Length: %d\r\n\r\n" \
 				"%s",
-				(int) strlen(json_object_to_json_string(json_array)),
+				content_length,
 				json_object_to_json_string(json_array));
-		send(sockfd, data, strlen(data), 0);
-
+		send(sockfd, http_response, strlen(http_response), 0);
 		close(sockfd);
+		free(http_response);
 	}
 
 	return 0;
