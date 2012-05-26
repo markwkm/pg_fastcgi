@@ -1,1 +1,3 @@
 httpd & postgres
+
+Requires json-c and libpq.
