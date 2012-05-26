@@ -187,8 +187,50 @@ int main()
 		{
 			json_obj = json_object_new_object();
 			for (j = 0; j < nFields; j++)
-				json_object_object_add(json_obj, PQfname(res, j),
-						json_object_new_string(PQgetvalue(res, i, j)));
+			{
+				/* Check if value is NULL before checking the column type. */
+				if (PQgetisnull(res, i, j))
+				{
+					json_object_object_add(json_obj, PQfname(res, j), NULL);
+					continue;
+				}
+
+				/*
+				 * Postgres types are defined in src/include/catalog/pg_type.h
+				 */
+				switch (PQftype(res, j))
+				{
+				case 16:
+				case 1000:
+					json_object_object_add(json_obj, PQfname(res, j),
+							json_object_new_boolean(PQgetvalue(res, i, j)[0] ==
+									't' ? 1: 0));
+					break;
+				case 20:
+				case 21:
+				case 23:
+				case 1005:
+				case 1007:
+				case 1016:
+					json_object_object_add(json_obj, PQfname(res, j),
+							json_object_new_int(atoi(PQgetvalue(res, i, j))));
+					break;
+				case 700:
+				case 701:
+				case 1021:
+				case 1022:
+				case 1231:
+				case 1700:
+					json_object_object_add(json_obj, PQfname(res, j),
+							json_object_new_double(atof(PQgetvalue(res, i,
+									j))));
+					break;
+				default:
+					json_object_object_add(json_obj, PQfname(res, j),
+							json_object_new_string(PQgetvalue(res, i, j)));
+					break;
+				}
+			}
 			json_object_array_add(json_array, json_obj);
 		}
 
