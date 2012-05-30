@@ -27,55 +27,19 @@
 int http_port = 54321;
 
 /* Prototypes */
+json_object *do_get(PGconn *, char *);
 json_object *process_http_request(char *, char *);
 
 json_object *
-process_http_request(char *method, char *request_uri)
+do_get(PGconn *conn, char *tablename)
 {
-	int count;
 	int i, j;
-	char *p1, *p2;
-
-	/* Postgres stuff */
-	char conninfo[1024];
-	char dbname[32];
-	char tablename[64];
-	char sql[128];
-	PGconn *conn;
 	PGresult *res;
 	int nFields;
+	char sql[128];
 
 	/* JSON stuff */
 	json_object *json_obj, *json_array;
-
-	/* Get the database name. */
-	count = 0;
-	p1 = request_uri + 1;
-	p2 = p1 + 1;
-	while (*p2 != '/' && count++ < 1024)
-		++p2;
-	i = p2 - p1;
-	i = i > 32 ? 32 : i;
-	strncpy(dbname, p1, i);
-	dbname[i] = '\0';
-	printf("dbname: '%s'\n", dbname);
-
-	/* Get the table name. */
-	p1 = p2 + 1;
-	p2 = p1 + 1;
-	while (*p2 != '\0' && count++ < 1024)
-		++p2;
-	i = p2 - p1;
-	i = i > 64 ? 64 : i;
-	strncpy(tablename, p1, i);
-	tablename[i] = '\0';
-	printf("tablename: '%s'\n", tablename);
-
-	/* Connect to postgres. */
-	snprintf(conninfo, 1024, "dbname=%s", dbname);
-	conn = PQconnectdb(conninfo);
-	if (PQstatus(conn) != CONNECTION_OK)
-		printf("%s", PQerrorMessage(conn));
 
 	snprintf(sql, 128, "SELECT * FROM %s;", tablename);
 	res = PQexec(conn, sql);
@@ -139,6 +103,87 @@ process_http_request(char *method, char *request_uri)
 	PQfinish(conn);
 
 	return json_array;
+}
+
+json_object *
+process_http_request(char *method, char *request_uri)
+{
+	int count;
+	int i;
+	char *p1, *p2;
+
+	/* Postgres stuff */
+	char conninfo[1024];
+	char dbname[32];
+	char tablename[64];
+	PGconn *conn;
+
+	/* Get the database name. */
+	count = 0;
+	p1 = request_uri + 1;
+	p2 = p1 + 1;
+	while (*p2 != '/' && count++ < 1024)
+		++p2;
+	i = p2 - p1;
+	i = i > 32 ? 32 : i;
+	strncpy(dbname, p1, i);
+	dbname[i] = '\0';
+	printf("dbname: '%s'\n", dbname);
+
+	/* Get the table name. */
+	p1 = p2 + 1;
+	p2 = p1 + 1;
+	while (*p2 != '\0' && count++ < 1024)
+		++p2;
+	i = p2 - p1;
+	i = i > 64 ? 64 : i;
+	strncpy(tablename, p1, i);
+	tablename[i] = '\0';
+	printf("tablename: '%s'\n", tablename);
+
+	/* Connect to postgres. */
+	snprintf(conninfo, 1024, "dbname=%s", dbname);
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+		printf("%s", PQerrorMessage(conn));
+
+	/*
+	 * HTTP 1.1 Methods
+	 *
+	 * CONNECT
+	 * DELETE
+	 * GET
+	 * HEAD
+	 * OPTIONS
+	 * POST
+	 * PUT
+	 * TRACE
+	 *
+	 * Just need to look at the first and maybe the second character of the
+	 * method to determine what it is.
+	 */
+
+	if (method[0] == 'C')
+		return NULL;
+	else if (method[0] == 'D')
+		return NULL;
+	else if (method[0] == 'G')
+		return do_get(conn, tablename);
+	else if (method[0] == 'H')
+		return NULL;
+	else if (method[0] == 'O')
+		return NULL;
+	else if (method[0] == 'P' && method[1] == 'O')
+		return NULL;
+	else if (method[0] == 'P' && method[1] == 'U')
+		return NULL;
+	else if (method[0] == 'T')
+		return NULL;
+	else
+	{
+		printf("unknown HTTP request method: %s\n", method);
+		return NULL;
+	}
 }
 
 /*
