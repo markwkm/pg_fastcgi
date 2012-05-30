@@ -26,6 +26,121 @@
 
 int http_port = 54321;
 
+/* Prototypes */
+json_object *process_http_request(char *, char *);
+
+json_object *
+process_http_request(char *method, char *request_uri)
+{
+	int count;
+	int i, j;
+	char *p1, *p2;
+
+	/* Postgres stuff */
+	char conninfo[1024];
+	char dbname[32];
+	char tablename[64];
+	char sql[128];
+	PGconn *conn;
+	PGresult *res;
+	int nFields;
+
+	/* JSON stuff */
+	json_object *json_obj, *json_array;
+
+	/* Get the database name. */
+	count = 0;
+	p1 = request_uri + 1;
+	p2 = p1 + 1;
+	while (*p2 != '/' && count++ < 1024)
+		++p2;
+	i = p2 - p1;
+	i = i > 32 ? 32 : i;
+	strncpy(dbname, p1, i);
+	dbname[i] = '\0';
+	printf("dbname: '%s'\n", dbname);
+
+	/* Get the table name. */
+	p1 = p2 + 1;
+	p2 = p1 + 1;
+	while (*p2 != '\0' && count++ < 1024)
+		++p2;
+	i = p2 - p1;
+	i = i > 64 ? 64 : i;
+	strncpy(tablename, p1, i);
+	tablename[i] = '\0';
+	printf("tablename: '%s'\n", tablename);
+
+	/* Connect to postgres. */
+	snprintf(conninfo, 1024, "dbname=%s", dbname);
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+		printf("%s", PQerrorMessage(conn));
+
+	snprintf(sql, 128, "SELECT * FROM %s;", tablename);
+	res = PQexec(conn, sql);
+	if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
+		printf("%s", PQerrorMessage(conn));
+
+	/* Build the JSON result. */
+	json_array = json_object_new_array();
+	nFields = PQnfields(res);
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		json_obj = json_object_new_object();
+		for (j = 0; j < nFields; j++)
+		{
+			/* Check if value is NULL before checking the column type. */
+			if (PQgetisnull(res, i, j))
+			{
+				json_object_object_add(json_obj, PQfname(res, j), NULL);
+				continue;
+			}
+
+			/*
+			 * Postgres types are defined in src/include/catalog/pg_type.h
+			 */
+			switch (PQftype(res, j))
+			{
+			case 16:
+			case 1000:
+				json_object_object_add(json_obj, PQfname(res, j),
+						json_object_new_boolean(PQgetvalue(res, i, j)[0] ==
+								't' ? 1: 0));
+				break;
+			case 20:
+			case 21:
+			case 23:
+			case 1005:
+			case 1007:
+			case 1016:
+				json_object_object_add(json_obj, PQfname(res, j),
+						json_object_new_int(atoi(PQgetvalue(res, i, j))));
+				break;
+			case 700:
+			case 701:
+			case 1021:
+			case 1022:
+			case 1231:
+			case 1700:
+				json_object_object_add(json_obj, PQfname(res, j),
+						json_object_new_double(atof(PQgetvalue(res, i, j))));
+				break;
+			default:
+				json_object_object_add(json_obj, PQfname(res, j),
+						json_object_new_string(PQgetvalue(res, i, j)));
+				break;
+			}
+		}
+		json_object_array_add(json_array, json_obj);
+	}
+
+	PQclear(res);
+	PQfinish(conn);
+
+	return json_array;
+}
+
 /*
  * main
  *
@@ -42,7 +157,8 @@ int http_port = 54321;
  * The database host, port and user will default to the environment that starts
  * up this program.
  */
-int main()
+int
+main()
 {
 	struct sockaddr_in sa;
 	int val;
@@ -82,7 +198,7 @@ int main()
 	/* Main HTTP listener loop. */
 	for (;;)
 	{
-		int i, j;
+		int i;
 
 		/* Socket stuff */
 		int sockfd;
@@ -92,15 +208,6 @@ int main()
 		char data[length];
 		int count;
 
-		/* Postgres stuff */
-		char conninfo[1024];
-		char dbname[32];
-		char tablename[64];
-		char sql[128];
-		PGconn *conn;
-		PGresult *res;
-		int nFields;
-
 		/* HTTP stuff */
 		char *p1, *p2;
 		char method[8];
@@ -109,7 +216,8 @@ int main()
 		int content_length;
 
 		/* JSON stuff */
-		json_object *json_obj, *json_array;
+		const char *json_str;
+		json_object *json_obj;
 
 		sockfd = accept(socket_listener, (struct sockaddr *) &sa, &addrlen);
 		if (sockfd == -1)
@@ -146,101 +254,13 @@ int main()
 		request_uri[i] = '\0';
 		printf("request_uri: '%s'\n", request_uri);
 
-		/* Get the database name. */
-		count = 0;
-		p1 = request_uri + 1;
-		p2 = p1 + 1;
-		while (*p2 != '/' && count++ < 1024)
-			++p2;
-		i = p2 - p1;
-		i = i > 32 ? 32 : i;
-		strncpy(dbname, p1, i);
-		dbname[i] = '\0';
-		printf("dbname: '%s'\n", dbname);
-
-		/* Get the table name. */
-		p1 = p2 + 1;
-		p2 = p1 + 1;
-		while (*p2 != '\0' && count++ < 1024)
-			++p2;
-		i = p2 - p1;
-		i = i > 64 ? 64 : i;
-		strncpy(tablename, p1, i);
-		tablename[i] = '\0';
-		printf("tablename: '%s'\n", tablename);
-
-		/* Connect to postgres. */
-		snprintf(conninfo, 1024, "dbname=%s", dbname);
-		conn = PQconnectdb(conninfo);
-		if (PQstatus(conn) != CONNECTION_OK)
-			printf("%s", PQerrorMessage(conn));
-
-		snprintf(sql, 128, "SELECT * FROM %s;", tablename);
-		res = PQexec(conn, sql);
-		if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
-			printf("%s", PQerrorMessage(conn));
-
-		/* Build the JSON result. */
-		json_array = json_object_new_array();
-		nFields = PQnfields(res);
-		for (i = 0; i < PQntuples(res); i++)
-		{
-			json_obj = json_object_new_object();
-			for (j = 0; j < nFields; j++)
-			{
-				/* Check if value is NULL before checking the column type. */
-				if (PQgetisnull(res, i, j))
-				{
-					json_object_object_add(json_obj, PQfname(res, j), NULL);
-					continue;
-				}
-
-				/*
-				 * Postgres types are defined in src/include/catalog/pg_type.h
-				 */
-				switch (PQftype(res, j))
-				{
-				case 16:
-				case 1000:
-					json_object_object_add(json_obj, PQfname(res, j),
-							json_object_new_boolean(PQgetvalue(res, i, j)[0] ==
-									't' ? 1: 0));
-					break;
-				case 20:
-				case 21:
-				case 23:
-				case 1005:
-				case 1007:
-				case 1016:
-					json_object_object_add(json_obj, PQfname(res, j),
-							json_object_new_int(atoi(PQgetvalue(res, i, j))));
-					break;
-				case 700:
-				case 701:
-				case 1021:
-				case 1022:
-				case 1231:
-				case 1700:
-					json_object_object_add(json_obj, PQfname(res, j),
-							json_object_new_double(atof(PQgetvalue(res, i,
-									j))));
-					break;
-				default:
-					json_object_object_add(json_obj, PQfname(res, j),
-							json_object_new_string(PQgetvalue(res, i, j)));
-					break;
-				}
-			}
-			json_object_array_add(json_array, json_obj);
-		}
-
-		PQclear(res);
-		PQfinish(conn);
+		json_obj = process_http_request(method, request_uri);
 
 		/* Construct the HTTP response. */
-		printf("json: %s\n", json_object_to_json_string(json_array));
+		json_str = json_object_to_json_string(json_obj);
+		printf("json: %s\n", json_str);
 
-		content_length = strlen(json_object_to_json_string(json_array));
+		content_length = strlen(json_str);
 		/*
 		 * I don't think the HTTP response header will ever get more than 64
 		 * bytes...
@@ -251,7 +271,7 @@ int main()
 				"Content-Length: %d\r\n\r\n" \
 				"%s",
 				content_length,
-				json_object_to_json_string(json_array));
+				json_str);
 		send(sockfd, http_response, strlen(http_response), 0);
 		close(sockfd);
 		free(http_response);
