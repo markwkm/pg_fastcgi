@@ -41,6 +41,10 @@ do_get(PGconn *conn, char *tablename)
 	/* JSON stuff */
 	json_object *json_obj, *json_array;
 
+	/* Don't try to execute anything if there is no tablename. */
+	if (tablename[0] == '\0')
+		return NULL;
+
 	snprintf(sql, 128, "SELECT * FROM %s;", tablename);
 	res = PQexec(conn, sql);
 	if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
@@ -122,7 +126,7 @@ process_http_request(char *method, char *request_uri)
 	count = 0;
 	p1 = request_uri + 1;
 	p2 = p1 + 1;
-	while (*p2 != '/' && count++ < 1024)
+	while ((*p2 != '/' || *p2 != '\0') && count++ < 1024)
 		++p2;
 	i = p2 - p1;
 	i = i > 32 ? 32 : i;
@@ -131,13 +135,18 @@ process_http_request(char *method, char *request_uri)
 	printf("dbname: '%s'\n", dbname);
 
 	/* Get the table name. */
-	p1 = p2 + 1;
-	p2 = p1 + 1;
-	while (*p2 != '\0' && count++ < 1024)
-		++p2;
-	i = p2 - p1;
-	i = i > 64 ? 64 : i;
-	strncpy(tablename, p1, i);
+	if (p2 == '\0')
+		i = 0;
+	else
+	{
+		p1 = p2 + 1;
+		p2 = p1 + 1;
+		while (*p2 != '\0' && count++ < 1024)
+			++p2;
+		i = p2 - p1;
+		i = i > 64 ? 64 : i;
+		strncpy(tablename, p1, i);
+	}
 	tablename[i] = '\0';
 	printf("tablename: '%s'\n", tablename);
 
@@ -145,7 +154,10 @@ process_http_request(char *method, char *request_uri)
 	snprintf(conninfo, 1024, "dbname=%s", dbname);
 	conn = PQconnectdb(conninfo);
 	if (PQstatus(conn) != CONNECTION_OK)
+	{
 		printf("%s", PQerrorMessage(conn));
+		return NULL;
+	}
 
 	/*
 	 * HTTP 1.1 Methods
