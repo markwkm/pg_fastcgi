@@ -126,7 +126,7 @@ process_http_request(char *method, char *request_uri)
 	count = 0;
 	p1 = request_uri + 1;
 	p2 = p1 + 1;
-	while ((*p2 != '/' || *p2 != '\0') && count++ < 1024)
+	while ((*p2 != '/' && *p2 != '\0') && count++ < 1024)
 		++p2;
 	i = p2 - p1;
 	i = i > 32 ? 32 : i;
@@ -331,6 +331,7 @@ main()
 				json_str);
 		send(sockfd, http_response, strlen(http_response), 0);
 		close(sockfd);
+		json_object_put(json_obj);
 		free(http_response);
 	}
 
