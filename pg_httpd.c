@@ -1,8 +1,8 @@
 /*-------------------------------------------------------------------------
  *
  * pg_httpd.c
- *     External HTTP listener process that translate URI requests to SQL
- *     queries and returns the results as JSON.
+ *     FastCGI program that translate URI requests to SQL queries and returns
+ *     the results as JSON.
  *
  * Portions Copyright (c) 2012, Mark Wong
  *
@@ -12,40 +12,106 @@
  *-------------------------------------------------------------------------
  */
 
+#include <fcgi_stdio.h>
+
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
+#include <syslog.h>
 
 #include <libpq-fe.h>
 
-#include <json/json.h>
+#include <json-c/json.h>
 
-int http_port = 54321;
+#define PGHOST_LEN 32
+#define PGDATABASE_LEN 32
+#define SCHEMANAME_LEN 66
+#define TABLENAME_LEN 66
 
-/* Prototypes */
-json_object *do_get(PGconn *, char *);
-json_object *process_http_request(char *, char *);
+int
+get_pgdatabase(char *script_name, char pgdatabase[])
+{
+	int length;
+	char *tmp;
+
+	/* Skip the leading / */
+	script_name++;
+	tmp = strstr(script_name, "/");
+	if (tmp == NULL)
+		return 1;
+	length = tmp - script_name;
+	length = length < PGDATABASE_LEN ? length : PGDATABASE_LEN;
+	strncpy(pgdatabase, script_name, length);
+
+	return 0;
+}
+
+int
+get_schemaname(char *script_name, char schemaname[])
+{
+	int length;
+	char *tmp;
+
+	/* Skip the leading / */
+	script_name++;
+	script_name = strstr(script_name, "/") + 1;
+	tmp = strstr(script_name, "/");
+	if (tmp == NULL)
+		return 1;
+	length = tmp - script_name;
+	length = length < SCHEMANAME_LEN ? length : SCHEMANAME_LEN;
+	strncpy(schemaname, script_name, length);
+
+	return 0;
+}
+
+int
+get_tablename(char *script_name, char tablename[])
+{
+	int length;
+	char *tmp;
+
+	/* Skip the leading / */
+	script_name++;
+	script_name = strstr(script_name, "/") + 1;
+	script_name = strstr(script_name, "/") + 1;
+	tmp = strstr(script_name, "/");
+	if (tmp == NULL)
+		length = strlen(script_name);
+	else
+		length = tmp - script_name;
+	length = length < TABLENAME_LEN ? length : TABLENAME_LEN;
+	strncpy(tablename, script_name, length);
+
+	return 0;
+}
 
 json_object *
-do_get(PGconn *conn, char *tablename)
+process_get(char pgdatabase[], char schemaname[], char tablename[])
 {
 	int i, j;
+
+	/* Postgres stuff */
+	char conninfo[1024];
+	PGconn *conn;
 	PGresult *res;
+
 	int nFields;
 	char sql[128];
 
 	/* JSON stuff */
 	json_object *json_obj, *json_array;
 
-	/* Don't try to execute anything if there is no tablename. */
-	if (tablename[0] == '\0')
+	/* Connect to postgres. */
+	snprintf(conninfo, 1024, "dbname=%s", pgdatabase);
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+	{
+		printf("%s", PQerrorMessage(conn));
 		return NULL;
+	}
 
-	snprintf(sql, 128, "SELECT * FROM %s;", tablename);
+	snprintf(sql, 128, "SELECT * FROM %s.%s;", schemaname, tablename);
 	res = PQexec(conn, sql);
 	if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
 		printf("%s", PQerrorMessage(conn));
@@ -109,231 +175,71 @@ do_get(PGconn *conn, char *tablename)
 	return json_array;
 }
 
-json_object *
-process_http_request(char *method, char *request_uri)
+int main()
 {
-	int count;
-	int i;
-	char *p1, *p2;
+	char *str;
 
-	/* Postgres stuff */
-	char conninfo[1024];
-	char dbname[32];
-	char tablename[64];
-	PGconn *conn;
+	char pghost[PGHOST_LEN + 1] = "localhost";
 
-	/* Get the database name. */
-	count = 0;
-	p1 = request_uri + 1;
-	p2 = p1 + 1;
-	while ((*p2 != '/' && *p2 != '\0') && count++ < 1024)
-		++p2;
-	i = p2 - p1;
-	i = i > 32 ? 32 : i;
-	strncpy(dbname, p1, i);
-	dbname[i] = '\0';
-	printf("dbname: '%s'\n", dbname);
+	str = getenv("PGHOST");
+	if (str != NULL)
+		strncpy(pghost, str, PGHOST_LEN);
 
-	/* Get the table name. */
-	if (p2 == '\0')
-		i = 0;
-	else
-	{
-		p1 = p2 + 1;
-		p2 = p1 + 1;
-		while (*p2 != '\0' && count++ < 1024)
-			++p2;
-		i = p2 - p1;
-		i = i > 64 ? 64 : i;
-		strncpy(tablename, p1, i);
-	}
-	tablename[i] = '\0';
-	printf("tablename: '%s'\n", tablename);
+	openlog("pg_httpd", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
+	syslog(LOG_INFO, "pg_httpd starting");
 
-	/* Connect to postgres. */
-	snprintf(conninfo, 1024, "dbname=%s", dbname);
-	conn = PQconnectdb(conninfo);
-	if (PQstatus(conn) != CONNECTION_OK)
-	{
-		printf("%s", PQerrorMessage(conn));
-		return NULL;
-	}
+	while (FCGI_Accept() >= 0) {
+		char pgdatabase[PGDATABASE_LEN + 1];
+		char schemaname[SCHEMANAME_LEN + 1];
+		char tablename[TABLENAME_LEN + 1];
 
-	/*
-	 * HTTP 1.1 Methods
-	 *
-	 * CONNECT
-	 * DELETE
-	 * GET
-	 * HEAD
-	 * OPTIONS
-	 * POST
-	 * PUT
-	 * TRACE
-	 *
-	 * Just need to look at the first and maybe the second character of the
-	 * method to determine what it is.
-	 */
+		char *request_method;
+		char *script_name;
 
-	if (method[0] == 'C')
-		return NULL;
-	else if (method[0] == 'D')
-		return NULL;
-	else if (method[0] == 'G')
-		return do_get(conn, tablename);
-	else if (method[0] == 'H')
-		return NULL;
-	else if (method[0] == 'O')
-		return NULL;
-	else if (method[0] == 'P' && method[1] == 'O')
-		return NULL;
-	else if (method[0] == 'P' && method[1] == 'U')
-		return NULL;
-	else if (method[0] == 'T')
-		return NULL;
-	else
-	{
-		printf("unknown HTTP request method: %s\n", method);
-		return NULL;
-	}
-}
-
-/*
- * main
- *
- * Very basic proof of concept.  Start listening to a port, loop indefinitely,
- * connect to the database based on the first part of the URI request, SELECT *
- * from the table in the next part of the URI request, create a JSON object
- * based on the results, and send it back.
- *
- * Example: http://localhost:54321/dbname/tablename
- *
- * This says connect to the database named "dbname" and SELECT * FROM
- * "tablename".
- *
- * The database host, port and user will default to the environment that starts
- * up this program.
- */
-int
-main()
-{
-	struct sockaddr_in sa;
-	int val;
-	int socket_listener;
-
-	/* Open a socket for incoming connections. */
-
-	val= 1;
-
-	memset(&sa, 0, sizeof(struct sockaddr_in));
-	sa.sin_family = AF_INET;
-	sa.sin_addr.s_addr = INADDR_ANY;
-	sa.sin_port = htons((unsigned short) http_port);
-
-	socket_listener = socket(PF_INET, SOCK_STREAM, 0);
-	if (socket_listener < 0)
-	{
-		perror("socket");
-		return -1;
-	}
-
-	setsockopt(socket_listener, SOL_SOCKET, SO_REUSEADDR, &val, sizeof (val));
-
-	if (bind(socket_listener, (struct sockaddr *) &sa,
-			sizeof(struct sockaddr_in)) < 0)
-	{
-		perror("bind");
-		return -1;
-	}
-
-	if (listen(socket_listener, 1) < 0)
-	{
-		perror("listen");
-		return -1;
-	}
-
-	/* Main HTTP listener loop. */
-	for (;;)
-	{
-		int i;
-
-		/* Socket stuff */
-		int sockfd;
-		socklen_t addrlen = sizeof(struct sockaddr_in);
-		int received;
-		int length = 2048;
-		char data[length];
-		int count;
-
-		/* HTTP stuff */
-		char *p1, *p2;
-		char method[8];
-		char request_uri[1024];
-		char *http_response;
-		int content_length;
-
-		/* JSON stuff */
 		const char *json_str;
 		json_object *json_obj;
 
-		sockfd = accept(socket_listener, (struct sockaddr *) &sa, &addrlen);
-		if (sockfd == -1)
-		{
-			perror("accept");
+		int content_length;
+
+		request_method = getenv("REQUEST_METHOD");
+		if (request_method == NULL)
 			continue;
+
+		bzero(pgdatabase, PGDATABASE_LEN + 1);
+		bzero(schemaname, SCHEMANAME_LEN + 1);
+		bzero(tablename, TABLENAME_LEN + 1);
+
+		if (strcmp(request_method, "GET") == 0) {
+			script_name = getenv("SCRIPT_NAME");
+			syslog(LOG_DEBUG, "GET SCRIPT_NAME %s", script_name);
+			syslog(LOG_DEBUG, "GET QUERY_STRING %s", getenv("QUERY_STRING"));
+			/* FIXME: handle when pgdatabase isn't identified. */
+			get_pgdatabase(script_name, pgdatabase);
+			syslog(LOG_DEBUG, "GET PGDATABASE %s", pgdatabase);
+			/* FIXME: handle when schemaname isn't identified. */
+			get_schemaname(script_name, schemaname);
+			syslog(LOG_DEBUG, "GET SCHEMANAME %s", schemaname);
+			/* FIXME: handle when tablename isn't identified. */
+			get_tablename(script_name, tablename);
+			syslog(LOG_DEBUG, "GET TABLENAME %s", tablename);
+
+			json_obj = process_get(pgdatabase, schemaname, tablename);
 		}
-
-		memset(data, 0, sizeof(data));
-		received = recv(sockfd, data, length, 0);
-		printf("ohai %d %s\n", received, data);
-
-		/* Get the HTTP method. */
-		count = 0;
-		p1 = data;
-		p2 = p1 + 1;
-		while (*p2 != ' ' && count++ < length)
-			++p2;
-		i = p2 - p1;
-		i = i > 8 ? 8 : i;
-		strncpy(method, p1, i);
-		method[i] = '\0';
-		printf("method: '%s'\n", method);
-
-		/* Get the HTTP request URI. */
-		count = 0;
-		p1 = p2 + 1;
-		p2 = p1 + 1;
-		while (*p2 != ' ' && count++ < length)
-			++p2;
-		i = p2 - p1;
-		i = i > 1024 ? 1024 : i;
-		strncpy(request_uri, p1, i);
-		request_uri[i] = '\0';
-		printf("request_uri: '%s'\n", request_uri);
-
-		json_obj = process_http_request(method, request_uri);
 
 		/* Construct the HTTP response. */
 		json_str = json_object_to_json_string(json_obj);
-		printf("json: %s\n", json_str);
-
+		syslog(LOG_DEBUG, "JSON: %s\n", json_str);
 		content_length = strlen(json_str);
-		/*
-		 * I don't think the HTTP response header will ever get more than 64
-		 * bytes...
-		 */
-		http_response = (char *) malloc(content_length + 64);
-		snprintf(http_response, content_length + 63,
-				"HTTP/1.0 200 OK\n" \
-				"Content-Length: %d\r\n\r\n" \
-				"%s",
-				content_length,
-				json_str);
-		send(sockfd, http_response, strlen(http_response), 0);
-		close(sockfd);
-		json_object_put(json_obj);
-		free(http_response);
+
+		printf("Content-type: text/plain\r\n"
+				"Content-length: %d\r\n"
+				"\r\n"
+				"%s", content_length, json_str);
+
 	}
+
+	syslog(LOG_INFO, "pg_httpd stopping");
+	closelog();
 
 	return 0;
 }

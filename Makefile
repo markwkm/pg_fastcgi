@@ -1,5 +1,5 @@
 CFLAGS=-g -Wall -c
-LDFLAGS=-lpq -ljson
+LDFLAGS=-lpq -ljson -lfcgi
 
 all: pg_httpd
 

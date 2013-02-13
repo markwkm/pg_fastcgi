@@ -1,3 +1,3 @@
 httpd & postgres
 
-Requires json-c and libpq.
+Requires fastcgi, json-c and libpq.
