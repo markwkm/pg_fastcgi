@@ -1,13 +1,13 @@
 CFLAGS=-g -Wall -c
 LDFLAGS=-lpq -ljson -lfcgi
 
-all: pg_httpd
+all: pg_fastcgi
 
-pg_httpd: pg_httpd.o
+pg_fastcgi: pg_fastcgi.o
 	$(CC) $(LDFLAGS) $< -o $@
 
-pg_httpd.o: pg_httpd.c
+pg_fastcgi.o: pg_fastcgi.c
 	$(CC) $(CFLAGS) $< -o $@
 
 clean:
-	rm -rf pg_httpd pg_httpd.o
+	rm -rf pg_fastcgi pg_fastcgi.o

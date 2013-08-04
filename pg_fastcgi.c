@@ -1,13 +1,13 @@
 /*-------------------------------------------------------------------------
  *
- * pg_httpd.c
+ * pg_fastcgi.c
  *     FastCGI program that translate URI requests to SQL queries and returns
  *     the results as JSON.
  *
  * Portions Copyright (c) 2012, Mark Wong
  *
  * IDENTIFICATION
- *     pg_httpd.c
+ *     pg_fastcgi.c
  *
  *-------------------------------------------------------------------------
  */
@@ -185,8 +185,8 @@ int main()
 	if (str != NULL)
 		strncpy(pghost, str, PGHOST_LEN);
 
-	openlog("pg_httpd", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
-	syslog(LOG_INFO, "pg_httpd starting");
+	openlog("pg_fastcgi", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
+	syslog(LOG_INFO, "pg_fastcgi starting");
 
 	while (FCGI_Accept() >= 0) {
 		char pgdatabase[PGDATABASE_LEN + 1];
@@ -238,7 +238,7 @@ int main()
 
 	}
 
-	syslog(LOG_INFO, "pg_httpd stopping");
+	syslog(LOG_INFO, "pg_fastcgi stopping");
 	closelog();
 
 	return 0;
